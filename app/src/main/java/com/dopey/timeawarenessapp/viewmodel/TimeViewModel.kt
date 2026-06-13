@@ -25,23 +25,28 @@ class TimeViewModel(private val repository: XmlRepository) : ViewModel() {
         when (intent) {
             is TimeIntent.LogCurrentTime -> logTime()
             is TimeIntent.ExportData -> exportXml()
+            is TimeIntent.SetTimeRange -> setRange(intent.startHour, intent.endHour)
         }
     }
 
     private fun logTime() {
         val now = LocalDateTime.now()
-        val expected = if (now.minute >= 30) {
-            now.plusHours(1).truncatedTo(ChronoUnit.HOURS)
-        } else {
-            now.truncatedTo(ChronoUnit.HOURS)
-        }
+        val expectedHour = if (now.minute >= 30) now.hour + 1 else now.hour
+        val expected = now.truncatedTo(ChronoUnit.HOURS)
+            .let { if (now.minute >= 30) it.plusHours(1) else it }
         val deviation = abs(ChronoUnit.MINUTES.between(expected, now))
 
-        _state.update { current ->
-            current.copy(
-                score = (current.score - deviation).coerceAtLeast(0),
-                logs = current.logs + TimeLog(
-                    expectedTime = expected,
+        // Only allow logging if expectedHour is within the configured range
+        val current = _state.value
+        if (expectedHour !in current.startHour until current.endHour) return
+        // Prevent duplicate log for same hour
+        if (current.logs.any { it.expectedHour == expectedHour }) return
+
+        _state.update { s ->
+            s.copy(
+                score = (s.score - deviation).coerceAtLeast(0),
+                logs = s.logs + TimeLog(
+                    expectedHour = expectedHour,
                     actualTime = now,
                     deviationMinutes = deviation
                 )
@@ -54,6 +59,12 @@ class TimeViewModel(private val repository: XmlRepository) : ViewModel() {
             _state.update { it.copy(isExporting = true) }
             repository.exportStateToXml(_state.value)
             _state.update { it.copy(isExporting = false) }
+        }
+    }
+
+    private fun setRange(start: Int, end: Int) {
+        if (end > start) {
+            _state.update { it.copy(startHour = start, endHour = end, logs = emptyList(), score = 100) }
         }
     }
 }
