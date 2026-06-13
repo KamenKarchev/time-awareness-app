@@ -16,11 +16,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -33,7 +30,8 @@ import com.dopey.timeawarenessapp.model.TimeState
 import com.dopey.timeawarenessapp.ui.theme.*
 import com.dopey.timeawarenessapp.viewmodel.TimeViewModel
 import kotlinx.coroutines.delay
-imx  import java.time.LocalTime
+import kotlinx.coroutines.launch
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.*
 
@@ -55,7 +53,6 @@ fun TimeAwarenessContent(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
-    // Live clock state
     var currentTime by remember { mutableStateOf(LocalTime.now()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -118,7 +115,6 @@ fun TimeAwarenessContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Score
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Spacer(modifier = Modifier.height(12.dp))
                     ScoreDisplay(score = state.score)
@@ -130,7 +126,6 @@ fun TimeAwarenessContent(
                     )
                 }
 
-                // Track oval
                 TrackOval(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -140,7 +135,6 @@ fun TimeAwarenessContent(
                     logs = state.logs
                 )
 
-                // Mark button
                 Button(
                     onClick = { onIntent(TimeIntent.LogCurrentTime) },
                     modifier = Modifier
@@ -176,7 +170,6 @@ fun TrackOval(
     val loggedHours = logs.map { it.expectedHour }.toSet()
     val nodeCount = nodes.size
 
-    // Pulse animation for the last logged node
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -194,8 +187,11 @@ fun TrackOval(
         val strokeWidth = 4.dp.toPx()
         val nodeRadius = 10.dp.toPx()
         val cornerRadius = w / 2f
+        val r = cornerRadius
+        val straightH = (h - 2 * r).coerceAtLeast(0f)
+        val semiPerimeter = PI.toFloat() * r
+        val totalPerimeter = 2 * straightH + 2 * semiPerimeter
 
-        // Draw the stadium oval (rounded rect)
         val trackPath = Path().apply {
             addRoundRect(
                 RoundRect(
@@ -212,101 +208,57 @@ fun TrackOval(
 
         if (nodeCount == 0) return@Canvas
 
-        // Distribute nodes around the perimeter of the stadium oval
-        // Perimeter: two straight segments + two semicircles
-        val r = cornerRadius
-        val straightH = (h - 2 * r).coerceAtLeast(0f)
-        val semiPerimeter = Math.PI.toFloat() * r
-        val totalPerimeter = 2 * straightH + 2 * semiPerimeter
         val spacing = totalPerimeter / nodeCount
+        val cx = w / 2f
+        val topArcRight = semiPerimeter / 2f
+        val bottomArc = semiPerimeter
 
         fun perimeterToOffset(dist: Float): Offset {
-            // Segments in order: top-right arc (0..semiPerimeter), right straight, bottom arc, left straight
-            var d = ((dist % totalPerimeter) + totalPerimeter) % totalPerimeter
-
-            // Top arc: center=(w-r, r), angles from -90 to +90 ... actually let's go clockwise from top-center
-            // top-center → right side → bottom-center → left side
-            // Segment 1: top semicircle (right half) = top-center clockwise to bottom-right: but stadium has straight sides
-            // Let's define 4 segments clockwise starting at top-center:
-            // S1: top arc (right semicircle, 180deg) from top-center going right: cx=w-r, cy=r, angles -90..90
-            // S2: right straight from (w, r) to (w, h-r)
-            // S3: bottom arc (left semicircle) cx=r, cy=h-r, angles 0..180
-            // S4: left straight from (0, h-r) to (0, r)
-            // Wait - stadium oval top arc spans the full top: cx=w/2... no.
-            // Correct stadium: left cap center=(r, r+straightH/2)? No.
-            // A stadium = rectangle with semicircles on top and bottom.
-            // Width=w, Height=h. Caps on top and bottom.
-            // Top cap: center=(w/2, r), semicircle facing up, angles 180..360 (or π..2π)
-            // Bottom cap: center=(w/2, h-r), semicircle facing down, angles 0..π
-            // Left straight: from (0, r) down to (0, h-r)
-            // Right straight: from (w, r) down to (w, h-r)
-            // Clockwise from top-center (w/2, 0):
-            // Arc1: top cap right half: (w/2,0) → (w, r), angle -90..0 on center (w/2, r): arc len = semiPerimeter/2
-            // Straight1: right side (w, r) → (w, h-r): len = straightH
-            // Arc2: bottom cap: (w, h-r) → (0, h-r), angle 0..180 on center (w/2, h-r): arc len = semiPerimeter
-            // Straight2: left side (0, h-r) → (0, r): len = straightH
-            // Arc3: top cap left half: (0, r) → (w/2, 0), angle 180..270 on center (w/2, r): arc len = semiPerimeter/2
-            // Total = semiPerimeter/2 + straightH + semiPerimeter + straightH + semiPerimeter/2 = 2*semiPerimeter + 2*straightH ✓
-
-            val topArcRight = semiPerimeter / 2f
-            val rightStraight = straightH
-            val bottomArc = semiPerimeter
-            val leftStraight = straightH
-            // leftArcTop = semiPerimeter/2 (remainder)
-
-            val cx = w / 2f
-
+            val d = ((dist % totalPerimeter) + totalPerimeter) % totalPerimeter
             return when {
                 d < topArcRight -> {
                     val angle = (-PI / 2 + (d / topArcRight) * (PI / 2)).toFloat()
                     Offset(cx + r * cos(angle), r + r * sin(angle))
                 }
-                d < topArcRight + rightStraight -> {
-                    val t = (d - topArcRight) / rightStraight
+                d < topArcRight + straightH -> {
+                    val t = (d - topArcRight) / straightH
                     Offset(w, r + t * straightH)
                 }
-                d < topArcRight + rightStraight + bottomArc -> {
-                    val t = (d - topArcRight - rightStraight) / bottomArc
+                d < topArcRight + straightH + bottomArc -> {
+                    val t = (d - topArcRight - straightH) / bottomArc
                     val angle = (t * PI).toFloat()
                     Offset(cx + r * cos(angle), (h - r) + r * sin(angle))
                 }
-                d < topArcRight + rightStraight + bottomArc + leftStraight -> {
-                    val t = (d - topArcRight - rightStraight - bottomArc) / leftStraight
+                d < topArcRight + straightH + bottomArc + straightH -> {
+                    val t = (d - topArcRight - straightH - bottomArc) / straightH
                     Offset(0f, (h - r) - t * straightH)
                 }
                 else -> {
-                    val t = (d - topArcRight - rightStraight - bottomArc - leftStraight) / (semiPerimeter / 2f)
+                    val t = (d - topArcRight - straightH - bottomArc - straightH) / (semiPerimeter / 2f)
                     val angle = (PI + t * (PI / 2)).toFloat()
                     Offset(cx + r * cos(angle), r + r * sin(angle))
                 }
             }
         }
 
-        // Draw nodes
         nodes.forEachIndexed { index, hour ->
-            val dist = index * spacing + spacing / 2f // offset so first node isn't at top-center seam
-            val pos = perimeterToOffset(dist)
+            val pos = perimeterToOffset(index * spacing + spacing / 2f)
             val isLogged = hour in loggedHours
             val isLastLogged = logs.lastOrNull()?.expectedHour == hour
 
-            // Outer glow for logged nodes
             if (isLogged) {
-                val glowAlpha = if (isLastLogged) pulseAlpha * 0.4f else 0.25f
                 drawCircle(
                     color = TerminalGreen,
                     radius = nodeRadius * 2.2f,
                     center = pos,
-                    alpha = glowAlpha
+                    alpha = if (isLastLogged) pulseAlpha * 0.4f else 0.25f
                 )
             }
-
-            // Node fill
             drawCircle(
                 color = if (isLogged) TerminalGreen else TerminalBackground,
                 radius = nodeRadius,
                 center = pos
             )
-            // Node border
             drawCircle(
                 color = if (isLogged) TerminalGreen else TerminalGray,
                 radius = nodeRadius,
@@ -365,8 +317,6 @@ fun SideDrawer(
             modifier = Modifier.padding(vertical = 12.dp, horizontal = 20.dp),
             color = TerminalGreen.copy(alpha = 0.3f)
         )
-
-        // Start hour
         Text(
             "START HOUR",
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -375,15 +325,8 @@ fun SideDrawer(
             color = TerminalGray
         )
         Spacer(Modifier.height(6.dp))
-        HourStepper(
-            value = startHour,
-            range = 0..22,
-            onValueChange = { startHour = it }
-        )
-
+        HourStepper(value = startHour, range = 0..22, onValueChange = { startHour = it })
         Spacer(Modifier.height(20.dp))
-
-        // End hour
         Text(
             "END HOUR",
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -392,23 +335,14 @@ fun SideDrawer(
             color = TerminalGray
         )
         Spacer(Modifier.height(6.dp))
-        HourStepper(
-            value = endHour,
-            range = 1..23,
-            onValueChange = { endHour = it }
-        )
-
+        HourStepper(value = endHour, range = 1..23, onValueChange = { endHour = it })
         Spacer(Modifier.height(24.dp))
-
         Button(
             onClick = {
                 onIntent(TimeIntent.SetTimeRange(startHour, endHour))
                 onClose()
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .height(48.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(48.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = TerminalGreen,
                 contentColor = Color(0xFF0D0D0D)
@@ -417,15 +351,10 @@ fun SideDrawer(
         ) {
             Text("APPLY RANGE", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
         }
-
         Spacer(Modifier.height(12.dp))
-
         OutlinedButton(
             onClick = { onIntent(TimeIntent.ExportData) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .height(48.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(48.dp),
             enabled = !state.isExporting && state.logs.isNotEmpty(),
             shape = RoundedCornerShape(4.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = TerminalGreen)
@@ -445,9 +374,7 @@ fun HourStepper(
     onValueChange: (Int) -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
