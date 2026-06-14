@@ -45,7 +45,6 @@ fun TimelinePillCanvas(
         val totalHours = (endHour - startHour).toFloat().coerceAtLeast(1f)
         val hourSeg = totalPerim / totalHours
 
-        // d=0 = top-centre, advances clockwise
         fun perimToOffset(raw: Float): Offset {
             val d    = ((raw % totalPerim) + totalPerim) % totalPerim
             val seg1 = semiPerim / 2f
@@ -78,14 +77,14 @@ fun TimelinePillCanvas(
             }
         }
 
-        // ── Full dim track ────────────────────────────────────────────────
+        // ── Dim track ─────────────────────────────────────────────────
         val trackPath = Path().apply {
             addRoundRect(RoundRect(Rect(0f, 0f, w, h), CornerRadius(capR)))
         }
         drawPath(trackPath, TerminalGray.copy(alpha = 0.3f), style = Stroke(stroke))
 
-        // ── Progress arc ────────────────────────────────────────────────
-        val elapsedHours = (now.hour - startHour) + now.minute / 60f + now.second / 3600f
+        // ── Progress arc — minute precision ─────────────────────────────
+        val elapsedHours = (now.hour - startHour) + now.minute / 60f
         val progressDist = (elapsedHours * hourSeg).coerceIn(0f, totalPerim)
         if (progressDist > 0f) {
             val steps = 200
@@ -100,18 +99,12 @@ fun TimelinePillCanvas(
 
         if (targets.isEmpty()) return@Canvas
 
-        // ── Target nodes: idx-th node at exactly d = idx * hourSeg ────────
-        // The first target (startHour) sits at d=0 (top-centre).
-        // Each subsequent node is exactly hourSeg further along.
+        // ── Target nodes ────────────────────────────────────────────────
         targets.forEachIndexed { idx, target ->
-            val dist = idx * hourSeg
-            val pos  = perimToOffset(dist)
-
-            val isPassed = target.status is TargetStatus.Hit ||
-                    target.status is TargetStatus.Missed ||
-                    now.hour > target.hour ||
-                    (now.hour == target.hour && now.minute > 0)
-            val nodeColor = if (isPassed) accuracyColor(dayScore) else TerminalGray
+            val dist     = idx * hourSeg
+            val pos      = perimToOffset(dist)
+            val arcPassed = dist <= progressDist
+            val nodeColor = if (arcPassed) accuracyColor(dayScore) else TerminalGray
 
             when (val s = target.status) {
                 is TargetStatus.Hit -> {
@@ -138,7 +131,7 @@ fun TimelinePillCanvas(
             }
         }
 
-        // ── Press marker dots (drawn after nodes so they render on top) ───
+        // ── Press marker dots (on top of nodes) ───────────────────────
         markers.forEach { marker ->
             val dist = marker.pathFraction * totalPerim
             val pos  = perimToOffset(dist)

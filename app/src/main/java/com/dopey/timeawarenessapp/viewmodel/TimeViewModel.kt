@@ -60,12 +60,10 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
 
     private fun handleClockIn() {
         val s = _state.value
-        val day = s.day
-        val now = s.now
-        if (TargetResolver.allDone(day.targets)) {
+        if (TargetResolver.allDone(s.day.targets)) {
             _state.update { it.copy(showAllDoneDialog = true) }; return
         }
-        val nextPending = TargetResolver.nextPendingTarget(day.targets, now)
+        val nextPending = TargetResolver.nextPendingTarget(s.day.targets, s.now)
         if (nextPending == null) {
             _state.update { it.copy(showEarlyDialog = true) }; return
         }
@@ -74,7 +72,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
 
     private fun commitClockIn(forceEarly: Boolean) {
         _state.update { it.copy(showEarlyDialog = false) }
-        val s = _state.value
+        val s   = _state.value
         val day = s.day
         val now = s.now
         val targetTick = if (forceEarly)
@@ -83,17 +81,15 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             TargetResolver.nextPendingTarget(day.targets, now)
         ?: return
 
-        val event    = ClockEvent(timestamp = now)
-        val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
-        val minutes  = ChronoUnit.MINUTES.between(targetDt, now)
-        val accuracy = ScoreCalculator.hitAccuracy(minutes)
+        val event     = ClockEvent(timestamp = now)
+        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
+        val minutes   = ChronoUnit.MINUTES.between(targetDt, now)
+        val accuracy  = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
 
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
-        // pathFraction = elapsed hours / totalHours (0..1)
-        // Canvas reconstructs dist = pathFraction * totalPerim
-        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) /
-                totalHours
+        // minute precision only, matches canvas elapsedHours formula
+        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f) / totalHours
 
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
             event        = event,
