@@ -13,4 +13,5 @@ sealed class TimeIntent {
     object OpenMenu : TimeIntent()
     object CloseMenu : TimeIntent()
     data class DebugSetTime(val dateTime: LocalDateTime) : TimeIntent()
+    object DebugResetDay : TimeIntent()
 }
