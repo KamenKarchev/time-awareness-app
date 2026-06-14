@@ -13,14 +13,6 @@ import com.dopey.timeawarenessapp.ui.theme.*
 import java.time.LocalDateTime
 import kotlin.math.*
 
-/**
- * Draws the stadium-pill timeline.
- *
- * The pill perimeter is divided into N equal segments, one per target hour.
- * Current-time position & passed-path segment are derived from [now] vs day range.
- * Each [markers] entry places a coloured dot on the path.
- * Missed targets show a triangle; perfect hits pulse white.
- */
 @Composable
 fun TimelinePillCanvas(
     modifier: Modifier = Modifier,
@@ -32,7 +24,6 @@ fun TimelinePillCanvas(
     dayScore: Int,
     perfectHitHour: Int?
 ) {
-    // Pulse animation for perfect nodes
     val infiniteTransition = rememberInfiniteTransition(label = "pill")
     val pulseAlpha by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 0.15f,
@@ -51,14 +42,16 @@ fun TimelinePillCanvas(
         val semiPerim = PI.toFloat() * capR
         val totalPerim = 2 * straightH + 2 * semiPerim
         val cx = w / 2f
+        val totalHours = (endHour - startHour).toFloat().coerceAtLeast(1f)
 
         // ── Helper: perimeter distance → canvas Offset ────────────────────
+        // d=0 is the top-centre of the pill; advances clockwise.
         fun perimToOffset(raw: Float): Offset {
             val d = ((raw % totalPerim) + totalPerim) % totalPerim
-            val seg1 = semiPerim / 2f          // top arc right half
-            val seg2 = seg1 + straightH        // right straight
-            val seg3 = seg2 + semiPerim        // bottom arc
-            val seg4 = seg3 + straightH        // left straight
+            val seg1 = semiPerim / 2f
+            val seg2 = seg1 + straightH
+            val seg3 = seg2 + semiPerim
+            val seg4 = seg3 + straightH
             return when {
                 d < seg1 -> {
                     val a = (-PI / 2 + (d / seg1) * (PI / 2)).toFloat()
@@ -91,56 +84,41 @@ fun TimelinePillCanvas(
         }
         drawPath(trackPath, TerminalGray.copy(alpha = 0.3f), style = Stroke(stroke))
 
-        // ── Current-time position on the path ────────────────────────────
-        val totalHours = (endHour - startHour).toFloat().coerceAtLeast(1f)
+        // ── Progress arc (same origin: d=0 = top-centre) ─────────────────
         val elapsedFrac = ((now.hour - startHour) + now.minute / 60f + now.second / 3600f) /
                 totalHours
-        val progressPerim = (elapsedFrac.coerceIn(0f, 1f)) * totalPerim
-
-        // Passed segment colored by day score
+        val progressPerim = elapsedFrac.coerceIn(0f, 1f) * totalPerim
         if (progressPerim > 0f) {
-            val scoreColor = accuracyColor(dayScore)
-            val passedPath = Path()
             val pm = android.graphics.PathMeasure(trackPath.asAndroidPath(), false)
             val dst = android.graphics.Path()
             pm.getSegment(0f, progressPerim, dst, true)
-            drawPath(dst.asComposePath(), scoreColor, style = Stroke(stroke))
+            drawPath(dst.asComposePath(), accuracyColor(dayScore), style = Stroke(stroke))
         }
 
-        // ── Nodes ────────────────────────────────────────────────────────
-        val n = targets.size
-        if (n == 0) return@Canvas
-        val spacing = totalPerim / n
+        // ── Nodes (same origin: hour midpoint mapped through totalHours) ──
+        // Each target sits at the centre of its hour slot, using the same
+        // fraction formula as the progress arc and press markers.
+        if (targets.isEmpty()) return@Canvas
+        targets.forEach { target ->
+            val frac = ((target.hour - startHour) + 0.5f) / totalHours
+            val dist = frac.coerceIn(0f, 1f) * totalPerim
+            val pos  = perimToOffset(dist)
 
-        targets.forEachIndexed { idx, target ->
-            val dist = idx * spacing + spacing / 2f
-            val pos = perimToOffset(dist)
-
-            val isPassed = when (val s = target.status) {
-                is TargetStatus.Hit    -> true
-                is TargetStatus.Missed -> true
-                else -> now.hour > target.hour ||
-                        (now.hour == target.hour && now.minute > 0)
-            }
-            val nodeColor = when {
-                isPassed -> accuracyColor(dayScore)
-                else     -> TerminalGray
-            }
+            val isPassed = target.status is TargetStatus.Hit ||
+                    target.status is TargetStatus.Missed ||
+                    now.hour > target.hour ||
+                    (now.hour == target.hour && now.minute > 0)
+            val nodeColor = if (isPassed) accuracyColor(dayScore) else TerminalGray
 
             when (val s = target.status) {
                 is TargetStatus.Hit -> {
-                    if (s.isPerfect && target.hour == perfectHitHour) {
-                        // Pulsing white glow
+                    if (s.isPerfect && target.hour == perfectHitHour)
                         drawCircle(TerminalWhite, nodeR * 2.5f, pos, alpha = pulseAlpha * 0.5f)
-                    }
-                    // Glow
                     drawCircle(accuracyColor(s.accuracy), nodeR * 2f, pos, alpha = 0.25f)
-                    // Fill
                     drawCircle(accuracyColor(s.accuracy), nodeR, pos)
                     drawCircle(accuracyColor(s.accuracy), nodeR, pos, style = Stroke(2.5f))
                 }
                 is TargetStatus.Missed -> {
-                    // Triangle for missed
                     val triPath = Path().apply {
                         moveTo(pos.x, pos.y - nodeR)
                         lineTo(pos.x + nodeR * 0.866f, pos.y + nodeR * 0.5f)
@@ -157,12 +135,11 @@ fun TimelinePillCanvas(
             }
         }
 
-        // ── Press marker dots ─────────────────────────────────────────────
+        // ── Press marker dots (pathFraction already uses same origin) ─────
         markers.forEach { marker ->
             val dist = marker.pathFraction * totalPerim
-            val pos = perimToOffset(dist)
-            val dotColor = accuracyColor(marker.accuracy)
-            drawCircle(dotColor, nodeR * 0.55f, pos)
+            val pos  = perimToOffset(dist)
+            drawCircle(accuracyColor(marker.accuracy), nodeR * 0.55f, pos)
             drawCircle(TerminalBackground, nodeR * 0.25f, pos)
         }
     }
