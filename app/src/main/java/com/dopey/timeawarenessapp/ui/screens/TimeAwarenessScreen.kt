@@ -33,10 +33,7 @@ private val DateFmt = DateTimeFormatter.ofPattern("EEE dd MMM")
 fun TimeAwarenessScreen(viewModel: TimeViewModel) {
     val state by viewModel.state.collectAsState()
     LaunchedEffect(Unit) {
-        while (true) {
-            viewModel.processIntent(TimeIntent.Tick)
-            delay(1000)
-        }
+        while (true) { viewModel.processIntent(TimeIntent.Tick); delay(1000) }
     }
     TimeAwarenessContent(state = state, onIntent = viewModel::processIntent)
 }
@@ -112,7 +109,6 @@ fun TimeAwarenessContent(state: AppUiState, onIntent: (TimeIntent) -> Unit) {
                     .padding(padding)
                     .background(TerminalBackground)
             ) {
-                // ── Main area (pill + orbs) ─────────────────────────────────
                 Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                     TimelinePillCanvas(
                         modifier       = Modifier.fillMaxSize().padding(24.dp),
@@ -138,50 +134,60 @@ fun TimeAwarenessContent(state: AppUiState, onIntent: (TimeIntent) -> Unit) {
                     }
                 }
 
-                // ── DEBUG: manual time input ────────────────────────────────
+                // ── DEBUG row ────────────────────────────────────────────────
                 var debugTime by remember { mutableStateOf("") }
-                TextField(
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    value = debugTime,
-                    onValueChange = { newText ->
-                        debugTime = newText
-                        try {
-                            val parsedTime = LocalTime.parse(newText, DateTimeFormatter.ISO_LOCAL_TIME)
-                            val dateTime   = LocalDateTime.of(LocalDate.now(), parsedTime)
-                            onIntent(TimeIntent.DebugSetTime(dateTime))
-                        } catch (e: DateTimeParseException) {
-                            // invalid input, wait for a valid string
-                        }
-                    },
-                    placeholder = { Text("HH:MM:SS", fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp, color = TerminalGray) },
-                    singleLine = true,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor   = Color(0xFF111100),
-                        unfocusedContainerColor = Color(0xFF111100),
-                        focusedTextColor        = TerminalAmber,
-                        unfocusedTextColor      = TerminalAmber,
-                        cursorColor             = TerminalAmber,
-                        focusedIndicatorColor   = TerminalAmber,
-                        unfocusedIndicatorColor = TerminalAmber.copy(alpha = 0.4f)
-                    ),
-                    textStyle = LocalTextStyle.current.copy(
-                        fontFamily = FontFamily.Monospace, fontSize = 14.sp
-                    ),
-                    label = { Text(
-                        if (state.debugTime != null)
-                            "⚠ DEBUG ${state.debugTime.toLocalTime()}"
-                        else
-                            "DBG TIME",
-                        fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TerminalAmber
-                    )}
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF111100)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextField(
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        value = debugTime,
+                        onValueChange = { newText ->
+                            debugTime = newText
+                            try {
+                                val parsedTime = LocalTime.parse(newText, DateTimeFormatter.ISO_LOCAL_TIME)
+                                val dateTime   = LocalDateTime.of(LocalDate.now(), parsedTime)
+                                onIntent(TimeIntent.DebugSetTime(dateTime))
+                            } catch (e: DateTimeParseException) { }
+                        },
+                        placeholder = { Text("HH:MM:SS", fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp, color = TerminalGray) },
+                        singleLine = true,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor   = Color(0xFF111100),
+                            unfocusedContainerColor = Color(0xFF111100),
+                            focusedTextColor        = TerminalAmber,
+                            unfocusedTextColor      = TerminalAmber,
+                            cursorColor             = TerminalAmber,
+                            focusedIndicatorColor   = TerminalAmber,
+                            unfocusedIndicatorColor = TerminalAmber.copy(alpha = 0.4f)
+                        ),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = FontFamily.Monospace, fontSize = 14.sp
+                        ),
+                        label = { Text(
+                            if (state.debugTime != null)
+                                "⚠ ${state.debugTime.toLocalTime()}"
+                            else "DBG TIME",
+                            fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = TerminalAmber
+                        )}
+                    )
+                    TextButton(
+                        onClick = { onIntent(TimeIntent.DebugResetDay) },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Text("RESET", fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp, color = TerminalAmber, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }
 }
 
-// ── Side drawer ───────────────────────────────────────────────────────────────
 @Composable
 fun RangeDrawer(
     startHour: Int, endHour: Int, isExporting: Boolean, hasLogs: Boolean,
@@ -189,18 +195,13 @@ fun RangeDrawer(
 ) {
     var draftStart by remember(startHour) { mutableIntStateOf(startHour) }
     var draftEnd   by remember(endHour)   { mutableIntStateOf(endHour) }
-
     ModalDrawerSheet(
         drawerContainerColor = Color(0xFF0D0D0D),
         drawerContentColor   = TerminalGreen
     ) {
         Spacer(Modifier.height(24.dp))
-        Text(
-            "SETTINGS",
-            modifier = Modifier.padding(horizontal = 20.dp),
-            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-            letterSpacing = 3.sp, fontSize = 13.sp, color = TerminalGreen
-        )
+        Text("SETTINGS", Modifier.padding(horizontal = 20.dp), fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold, letterSpacing = 3.sp, fontSize = 13.sp, color = TerminalGreen)
         HorizontalDivider(Modifier.padding(vertical = 12.dp, horizontal = 20.dp), color = TerminalGreen.copy(0.3f))
         DrawerLabel("START HOUR")
         Spacer(Modifier.height(6.dp))

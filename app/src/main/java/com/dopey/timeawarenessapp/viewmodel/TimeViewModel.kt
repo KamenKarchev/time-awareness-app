@@ -43,10 +43,9 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             is TimeIntent.OpenMenu             -> _state.update { it.copy(isMenuOpen = true) }
             is TimeIntent.CloseMenu            -> _state.update { it.copy(isMenuOpen = false) }
             is TimeIntent.DebugSetTime         -> debugSetTime(intent.dateTime)
+            is TimeIntent.DebugResetDay        -> debugResetDay()
         }
     }
-
-    // ── Tick ─────────────────────────────────────────────────────────────────
 
     private fun tick() {
         val now = _state.value.debugTime ?: LocalDateTime.now()
@@ -59,24 +58,17 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         if (_state.value.day.date != today) rolloverDay(today)
     }
 
-    // ── Clock-in logic ───────────────────────────────────────────────────────
-
     private fun handleClockIn() {
         val s = _state.value
         val day = s.day
         val now = s.now
-
         if (TargetResolver.allDone(day.targets)) {
-            _state.update { it.copy(showAllDoneDialog = true) }
-            return
+            _state.update { it.copy(showAllDoneDialog = true) }; return
         }
-
         val nextPending = TargetResolver.nextPendingTarget(day.targets, now)
         if (nextPending == null) {
-            _state.update { it.copy(showEarlyDialog = true) }
-            return
+            _state.update { it.copy(showEarlyDialog = true) }; return
         }
-
         commitClockIn(forceEarly = false)
     }
 
@@ -85,67 +77,47 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val s = _state.value
         val day = s.day
         val now = s.now
-
-        val targetTick = if (forceEarly) {
+        val targetTick = if (forceEarly)
             day.targets.firstOrNull { it.status is TargetStatus.Pending }
-        } else {
+        else
             TargetResolver.nextPendingTarget(day.targets, now)
-        } ?: return
-
+        ?: return
         val event = ClockEvent(timestamp = now)
-        val newEvents = day.rawEvents + event
         val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
-        val minutes = ChronoUnit.MINUTES.between(targetDt, now)
+        val minutes  = ChronoUnit.MINUTES.between(targetDt, now)
         val accuracy = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
-
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
         val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) / totalHours
-
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
-            event = event,
-            pathFraction = pathFrac.coerceIn(0f, 1f),
-            accuracy = accuracy,
-            targetHour = targetTick.hour
+            event = event, pathFraction = pathFrac.coerceIn(0f, 1f),
+            accuracy = accuracy, targetHour = targetTick.hour
         )
-
         val updatedTargets = day.targets.map { t ->
-            if (t.hour == targetTick.hour) t.copy(status = TargetStatus.Hit(event, accuracy, isPerfect))
-            else t
+            if (t.hour == targetTick.hour) t.copy(status = TargetStatus.Hit(event, accuracy, isPerfect)) else t
         }
-        val newScore = ScoreCalculator.dayScore(updatedTargets)
         val newDay = day.copy(
-            rawEvents = newEvents,
-            markers = day.markers + newMarker,
-            targets = updatedTargets,
-            score = newScore
+            rawEvents = day.rawEvents + event,
+            markers   = day.markers + newMarker,
+            targets   = updatedTargets,
+            score     = ScoreCalculator.dayScore(updatedTargets)
         )
-
-        _state.update { it.copy(
-            day = newDay,
-            perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour
-        )}
+        _state.update { it.copy(day = newDay, perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour) }
         viewModelScope.launch { repo.saveDay(newDay) }
     }
 
-    // ── Range ─────────────────────────────────────────────────────────────────
-
     private fun setRange(start: Int, end: Int) {
         if (end <= start) return
-        val s = _state.value
-        val day = s.day
+        val day = _state.value.day
         val (resolvedTargets, resolvedMarkers) = TargetResolver.resolve(day.date, start, end, day.rawEvents)
         val newDay = day.copy(
             startHour = start, endHour = end,
-            targets = resolvedTargets,
-            markers = resolvedMarkers,
+            targets = resolvedTargets, markers = resolvedMarkers,
             score = ScoreCalculator.dayScore(resolvedTargets)
         )
         _state.update { it.copy(day = newDay, isMenuOpen = false) }
         viewModelScope.launch { repo.saveDay(newDay) }
     }
-
-    // ── Day rollover ─────────────────────────────────────────────────────────
 
     private fun rolloverDay(today: LocalDate) {
         val old = _state.value.day
@@ -154,11 +126,8 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         }
         val finalDay = old.copy(targets = finalTargets, endScore = ScoreCalculator.dayScore(finalTargets))
         viewModelScope.launch { repo.saveDay(finalDay) }
-        val newDay = repo.loadDay(today)
-        _state.update { it.copy(day = newDay) }
+        _state.update { it.copy(day = repo.loadDay(today)) }
     }
-
-    // ── Export ───────────────────────────────────────────────────────────────
 
     private fun export() {
         viewModelScope.launch {
@@ -168,18 +137,24 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         }
     }
 
-    // ── Debug ─────────────────────────────────────────────────────────────────
-
     private fun debugSetTime(dateTime: LocalDateTime) {
         _state.update { it.copy(debugTime = dateTime, now = dateTime) }
+    }
+
+    private fun debugResetDay() {
+        val day = _state.value.day
+        val freshTargets = TargetResolver.buildTargets(day.date, day.startHour, day.endHour)
+        val newDay = day.copy(rawEvents = emptyList(), markers = emptyList(),
+            targets = freshTargets, score = 0, endScore = null)
+        _state.update { it.copy(day = newDay) }
+        viewModelScope.launch { repo.saveDay(newDay) }
     }
 }
 
 class TimeViewModelFactory(private val repo: XmlRepository) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(TimeViewModel::class.java))
-            return TimeViewModel(repo) as T
+        if (modelClass.isAssignableFrom(TimeViewModel::class.java)) return TimeViewModel(repo) as T
         throw IllegalArgumentException("Unknown ViewModel")
     }
 }
