@@ -14,9 +14,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         val repository = XmlRepository(applicationContext)
-
         setContent {
             TimeAwarenessTheme {
                 val vm = viewModel<com.dopey.timeawarenessapp.viewmodel.TimeViewModel>(

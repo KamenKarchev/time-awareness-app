@@ -4,77 +4,186 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dopey.timeawarenessapp.data.XmlRepository
+import com.dopey.timeawarenessapp.domain.ClockEvent
+import com.dopey.timeawarenessapp.domain.ScoreCalculator
+import com.dopey.timeawarenessapp.domain.TargetResolver
+import com.dopey.timeawarenessapp.domain.TargetStatus
 import com.dopey.timeawarenessapp.intent.TimeIntent
-import com.dopey.timeawarenessapp.model.TimeLog
-import com.dopey.timeawarenessapp.model.TimeState
+import com.dopey.timeawarenessapp.model.AppUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.temporal.ChronoUnit
-import kotlin.math.abs
 
-class TimeViewModel(private val repository: XmlRepository) : ViewModel() {
+class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
 
-    private val _state = MutableStateFlow(TimeState())
-    val state: StateFlow<TimeState> = _state.asStateFlow()
+    private val _state = MutableStateFlow(AppUiState())
+    val state: StateFlow<AppUiState> = _state.asStateFlow()
+
+    init {
+        val today = LocalDate.now()
+        val day = repo.loadDay(today)
+        _state.update { it.copy(day = day) }
+    }
 
     fun processIntent(intent: TimeIntent) {
         when (intent) {
-            is TimeIntent.LogCurrentTime -> logTime()
-            is TimeIntent.ExportData -> exportXml()
-            is TimeIntent.SetTimeRange -> setRange(intent.startHour, intent.endHour)
+            is TimeIntent.Tick                -> tick()
+            is TimeIntent.ClockIn             -> handleClockIn()
+            is TimeIntent.ConfirmEarlyClockIn -> commitClockIn(forceEarly = true)
+            is TimeIntent.DismissEarlyDialog  -> _state.update { it.copy(showEarlyDialog = false) }
+            is TimeIntent.DismissAllDoneDialog-> _state.update { it.copy(showAllDoneDialog = false) }
+            is TimeIntent.SetTimeRange        -> setRange(intent.startHour, intent.endHour)
+            is TimeIntent.ExportData          -> export()
+            is TimeIntent.OpenMenu            -> _state.update { it.copy(isMenuOpen = true) }
+            is TimeIntent.CloseMenu           -> _state.update { it.copy(isMenuOpen = false) }
         }
     }
 
-    private fun logTime() {
+    // ── Tick ─────────────────────────────────────────────────────────────────
+
+    private fun tick() {
         val now = LocalDateTime.now()
-        val expectedHour = if (now.minute >= 30) now.hour + 1 else now.hour
-        val expected = now.truncatedTo(ChronoUnit.HOURS)
-            .let { if (now.minute >= 30) it.plusHours(1) else it }
-        val deviation = abs(ChronoUnit.MINUTES.between(expected, now))
-
-        // Only allow logging if expectedHour is within the configured range
-        val current = _state.value
-        if (expectedHour !in current.startHour until current.endHour) return
-        // Prevent duplicate log for same hour
-        if (current.logs.any { it.expectedHour == expectedHour }) return
-
         _state.update { s ->
-            s.copy(
-                score = (s.score - deviation).coerceAtLeast(0),
-                logs = s.logs + TimeLog(
-                    expectedHour = expectedHour,
-                    actualTime = now,
-                    deviationMinutes = deviation
-                )
-            )
+            // clear perfectHitHour after 4s
+            val clearPerfect = if (s.perfectHitHour != null &&
+                ChronoUnit.SECONDS.between(s.now, now) >= 4) null else s.perfectHitHour
+            s.copy(now = now, perfectHitHour = clearPerfect)
         }
+        // Rollover: if date changed, finalise previous day & load today
+        val today = LocalDate.now()
+        if (_state.value.day.date != today) rolloverDay(today)
     }
 
-    private fun exportXml() {
-        viewModelScope.launch {
-            _state.update { it.copy(isExporting = true) }
-            repository.exportStateToXml(_state.value)
-            _state.update { it.copy(isExporting = false) }
+    // ── Clock-in logic ───────────────────────────────────────────────────────
+
+    private fun handleClockIn() {
+        val s = _state.value
+        val day = s.day
+        val now = s.now
+
+        // All targets done?
+        if (TargetResolver.allDone(day.targets)) {
+            _state.update { it.copy(showAllDoneDialog = true) }
+            return
         }
+
+        val nextPending = TargetResolver.nextPendingTarget(day.targets, now)
+
+        // No pending target whose hour has arrived yet — means user is pressing BEFORE the next target hour
+        if (nextPending == null) {
+            // There must be a future pending target; pressing now is "early"
+            _state.update { it.copy(showEarlyDialog = true) }
+            return
+        }
+
+        commitClockIn(forceEarly = false)
     }
+
+    private fun commitClockIn(forceEarly: Boolean) {
+        _state.update { it.copy(showEarlyDialog = false) }
+        val s = _state.value
+        val day = s.day
+        val now = s.now
+
+        // Find the target to assign this press to
+        val targetTick = if (forceEarly) {
+            // Assign to the next pending target regardless of hour
+            day.targets.firstOrNull { it.status is TargetStatus.Pending }
+        } else {
+            TargetResolver.nextPendingTarget(day.targets, now)
+        } ?: return
+
+        val event = ClockEvent(timestamp = now)
+        val newEvents = day.rawEvents + event
+        val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
+        val minutes = ChronoUnit.MINUTES.between(targetDt, now)
+        val accuracy = ScoreCalculator.hitAccuracy(minutes)
+        val isPerfect = now.minute == 0 && now.second < 5
+
+        val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
+        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) / totalHours
+
+        val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
+            event = event,
+            pathFraction = pathFrac.coerceIn(0f, 1f),
+            accuracy = accuracy,
+            targetHour = targetTick.hour
+        )
+
+        val updatedTargets = day.targets.map { t ->
+            if (t.hour == targetTick.hour) t.copy(status = TargetStatus.Hit(event, accuracy, isPerfect))
+            else t
+        }
+        val newScore = ScoreCalculator.dayScore(updatedTargets)
+        val newDay = day.copy(
+            rawEvents = newEvents,
+            markers = day.markers + newMarker,
+            targets = updatedTargets,
+            score = newScore
+        )
+
+        _state.update { it.copy(
+            day = newDay,
+            perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour
+        )}
+        viewModelScope.launch { repo.saveDay(newDay) }
+    }
+
+    // ── Range ────────────────────────────────────────────────────────────────
 
     private fun setRange(start: Int, end: Int) {
-        if (end > start) {
-            _state.update { it.copy(startHour = start, endHour = end, logs = emptyList(), score = 100) }
+        if (end <= start) return
+        val s = _state.value
+        val day = s.day
+        val newTargets = TargetResolver.buildTargets(day.date, start, end)
+        // Re-resolve existing events against the new range
+        val (resolvedTargets, resolvedMarkers) = TargetResolver.resolve(day.date, start, end, day.rawEvents)
+        val newDay = day.copy(
+            startHour = start, endHour = end,
+            targets = resolvedTargets,
+            markers = resolvedMarkers,
+            score = ScoreCalculator.dayScore(resolvedTargets)
+        )
+        _state.update { it.copy(day = newDay, isMenuOpen = false) }
+        viewModelScope.launch { repo.saveDay(newDay) }
+    }
+
+    // ── Day rollover ─────────────────────────────────────────────────────────
+
+    private fun rolloverDay(today: LocalDate) {
+        val old = _state.value.day
+        // Mark remaining pending as missed and save
+        val finalTargets = old.targets.map { t ->
+            if (t.status is TargetStatus.Pending) t.copy(status = TargetStatus.Missed) else t
+        }
+        val finalDay = old.copy(targets = finalTargets, endScore = ScoreCalculator.dayScore(finalTargets))
+        viewModelScope.launch { repo.saveDay(finalDay) }
+        val newDay = repo.loadDay(today)
+        _state.update { it.copy(day = newDay) }
+    }
+
+    // ── Export ───────────────────────────────────────────────────────────────
+
+    private fun export() {
+        viewModelScope.launch {
+            _state.update { it.copy(isExporting = true) }
+            repo.exportToExternal()
+            _state.update { it.copy(isExporting = false) }
         }
     }
 }
 
-class TimeViewModelFactory(private val repository: XmlRepository) : ViewModelProvider.Factory {
+class TimeViewModelFactory(private val repo: XmlRepository) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(TimeViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return TimeViewModel(repository) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
+        if (modelClass.isAssignableFrom(TimeViewModel::class.java))
+            return TimeViewModel(repo) as T
+        throw IllegalArgumentException("Unknown ViewModel")
     }
 }
