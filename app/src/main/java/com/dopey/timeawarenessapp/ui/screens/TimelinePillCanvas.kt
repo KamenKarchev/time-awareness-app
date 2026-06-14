@@ -26,13 +26,11 @@ fun TimelinePillCanvas(
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pill")
 
-    // White outer glow for perfect hit
     val perfectPulse by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 0.1f,
         animationSpec = infiniteRepeatable(tween(800, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "perfect"
     )
-    // Gray fill circle for missed: radius fraction 0→1
     val missedPulse by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(700, easing = EaseInOutSine), RepeatMode.Reverse),
@@ -88,9 +86,9 @@ fun TimelinePillCanvas(
         val trackPath = Path().apply {
             addRoundRect(RoundRect(Rect(0f, 0f, w, h), CornerRadius(capR)))
         }
-        drawPath(trackPath, TerminalMidGray.copy(alpha = 0.5f), style = Stroke(stroke))
+        drawPath(trackPath, TerminalGray.copy(alpha = 0.5f), style = Stroke(stroke))
 
-        // ── Progress arc (minute precision) ────────────────────────────
+        // ── Progress arc ──────────────────────────────────────────────
         val elapsedHours = (now.hour - startHour) + now.minute / 60f
         val progressDist = (elapsedHours * hourSeg).coerceIn(0f, totalPerim)
         if (progressDist > 0f) {
@@ -106,36 +104,34 @@ fun TimelinePillCanvas(
         if (targets.isEmpty()) return@Canvas
 
         // ── Target nodes ──────────────────────────────────────────────
-        // Rules (all solid fills, no outlines):
-        // Pending, arc not passed  → solid TerminalGray
-        // Pending, arc passed      → solid accuracyColor(dayScore) [live, same as arc]
-        // Hit normal               → solid accuracyColor(s.accuracy) [frozen at hit time]
-        // Hit perfect (current)    → solid TerminalGreen + white outer pulse
-        // Missed                   → solid TerminalDeepRed + pulsating gray circle
+        // Pending not passed  → solid TerminalGray
+        // Pending passed      → impossible after tick() auto-marks Missed
+        // Hit normal          → solid accuracyColor(dayScore) [live, same as arc]
+        // Hit perfect active  → solid TerminalGreen + white outer pulse
+        // Missed              → solid TerminalDeepRed triangle + pulsing gray circle
         targets.forEachIndexed { idx, target ->
-            val dist      = idx * hourSeg
-            val pos       = perimToOffset(dist)
-            val arcPassed = dist < progressDist
+            val dist = idx * hourSeg
+            val pos  = perimToOffset(dist)
 
             when (val s = target.status) {
 
                 is TargetStatus.Pending -> {
-                    val fillColor = if (arcPassed) accuracyColor(dayScore) else TerminalGray
-                    drawCircle(fillColor, nodeR, pos)
+                    // Only reachable for current or future targets (past ones are Missed by tick)
+                    drawCircle(TerminalGray, nodeR, pos)
                 }
 
                 is TargetStatus.Hit -> {
                     val isPerfectNow = s.isPerfect && target.hour == perfectHitHour
-                    val fillColor    = if (s.isPerfect) TerminalGreen else accuracyColor(s.accuracy)
                     if (isPerfectNow) {
-                        // Pulsating white outer glow
                         drawCircle(TerminalWhite, nodeR * 2.5f, pos, alpha = perfectPulse * 0.6f)
+                        drawCircle(TerminalGreen, nodeR, pos)
+                    } else {
+                        // Live score color — same as arc and all other passed nodes
+                        drawCircle(accuracyColor(dayScore), nodeR, pos)
                     }
-                    drawCircle(fillColor, nodeR, pos)
                 }
 
                 is TargetStatus.Missed -> {
-                    // Solid deep-red triangle
                     val triPath = Path().apply {
                         moveTo(pos.x, pos.y - nodeR)
                         lineTo(pos.x + nodeR * 0.866f, pos.y + nodeR * 0.5f)
@@ -143,7 +139,6 @@ fun TimelinePillCanvas(
                         close()
                     }
                     drawPath(triPath, TerminalDeepRed)
-                    // Pulsating light-gray circle: radius 0 → nodeR, full alpha
                     drawCircle(TerminalGray, missedPulse * nodeR, pos)
                 }
             }

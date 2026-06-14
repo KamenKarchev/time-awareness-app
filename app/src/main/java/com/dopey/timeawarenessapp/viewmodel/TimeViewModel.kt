@@ -55,7 +55,23 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             s.copy(now = now, perfectHitHour = clearPerfect)
         }
         val today = LocalDate.now()
-        if (_state.value.day.date != today) rolloverDay(today)
+        if (_state.value.day.date != today) { rolloverDay(today); return }
+
+        // Auto-mark any Pending target whose hour is strictly in the past as Missed
+        val day = _state.value.day
+        val missedAny = day.targets.any {
+            it.status is TargetStatus.Pending && it.hour < now.hour
+        }
+        if (missedAny) {
+            val updated = day.targets.map { t ->
+                if (t.status is TargetStatus.Pending && t.hour < now.hour)
+                    t.copy(status = TargetStatus.Missed)
+                else t
+            }
+            val newDay = day.copy(targets = updated, score = ScoreCalculator.dayScore(updated))
+            _state.update { it.copy(day = newDay) }
+            viewModelScope.launch { repo.saveDay(newDay) }
+        }
     }
 
     private fun handleClockIn() {
@@ -88,7 +104,6 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val isPerfect = now.minute == 0 && now.second < 5
 
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
-        // minute precision only, matches canvas elapsedHours formula
         val pathFrac = ((now.hour - day.startHour) + now.minute / 60f) / totalHours
 
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
