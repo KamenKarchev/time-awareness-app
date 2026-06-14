@@ -77,16 +77,11 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val s = _state.value
         val day = s.day
         val now = s.now
-        val targetTick =
-            if (forceEarly){
-                val t = day.targets.firstOrNull { it.status is TargetStatus.Pending }
-                if (t == null)
-                    TargetResolver.nextPendingTarget(day.targets, now)
-                else
-                    t
-            }
-            else
-                TargetResolver.nextPendingTarget(day.targets, now)
+        val targetTick = if (forceEarly)
+            day.targets.firstOrNull { it.status is TargetStatus.Pending }
+        else
+            TargetResolver.nextPendingTarget(day.targets, now)
+        ?: return
 
         val event = ClockEvent(timestamp = now)
         val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick!!.hour, 0))
