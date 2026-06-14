@@ -5,25 +5,16 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val TerminalBackground = Color(0xFF121212)
-val TerminalGreen = Color(0xFF00FF00)
-val TerminalAmber = Color(0xFFFFBF00)
-val TerminalRed = Color(0xFFFF4444)
-val TerminalGray = Color(0xFFAAAAAA)
-
-private val TerminalColorScheme = darkColorScheme(
-    primary = TerminalGreen,
+private val DarkColors = darkColorScheme(
+    primary   = TerminalGreen,
     background = TerminalBackground,
-    surface = Color(0xFF1E1E1E),
+    surface   = Color(0xFF0D0D0D),
+    onPrimary  = TerminalBackground,
     onBackground = TerminalGreen,
-    onSurface = TerminalGreen,
-    error = TerminalRed
+    onSurface  = TerminalGreen
 )
 
 @Composable
 fun TimeAwarenessTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = TerminalColorScheme,
-        content = content
-    )
+    MaterialTheme(colorScheme = DarkColors, content = content)
 }
