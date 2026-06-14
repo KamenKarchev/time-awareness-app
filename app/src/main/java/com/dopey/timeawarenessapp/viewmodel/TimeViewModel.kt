@@ -55,17 +55,31 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             s.copy(now = now, perfectHitHour = clearPerfect)
         }
         val today = LocalDate.now()
-        if (_state.value.day.date != today) rolloverDay(today)
+        if (_state.value.day.date != today) { rolloverDay(today); return }
+
+        // Auto-mark any Pending target whose hour is strictly in the past as Missed
+        val day = _state.value.day
+        val missedAny = day.targets.any {
+            it.status is TargetStatus.Pending && it.hour < now.hour
+        }
+        if (missedAny) {
+            val updated = day.targets.map { t ->
+                if (t.status is TargetStatus.Pending && t.hour < now.hour)
+                    t.copy(status = TargetStatus.Missed)
+                else t
+            }
+            val newDay = day.copy(targets = updated, score = ScoreCalculator.dayScore(updated))
+            _state.update { it.copy(day = newDay) }
+            viewModelScope.launch { repo.saveDay(newDay) }
+        }
     }
 
     private fun handleClockIn() {
         val s = _state.value
-        val day = s.day
-        val now = s.now
-        if (TargetResolver.allDone(day.targets)) {
+        if (TargetResolver.allDone(s.day.targets)) {
             _state.update { it.copy(showAllDoneDialog = true) }; return
         }
-        val nextPending = TargetResolver.nextPendingTarget(day.targets, now)
+        val nextPending = TargetResolver.nextPendingTarget(s.day.targets, s.now)
         if (nextPending == null) {
             _state.update { it.copy(showEarlyDialog = true) }; return
         }
@@ -74,7 +88,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
 
     private fun commitClockIn(forceEarly: Boolean) {
         _state.update { it.copy(showEarlyDialog = false) }
-        val s = _state.value
+        val s   = _state.value
         val day = s.day
         val now = s.now
         val targetTick = if (forceEarly)
@@ -83,17 +97,14 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             TargetResolver.nextPendingTarget(day.targets, now)
         ?: return
 
-        val event = ClockEvent(timestamp = now)
-        val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick!!.hour, 0))
-        val minutes  = ChronoUnit.MINUTES.between(targetDt, now)
-        val accuracy = ScoreCalculator.hitAccuracy(minutes)
+        val event     = ClockEvent(timestamp = now)
+        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick!!.hour, 0))
+        val minutes   = ChronoUnit.MINUTES.between(targetDt, now)
+        val accuracy  = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
 
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
-        // pathFraction = elapsed hours / totalHours (0..1)
-        // Canvas reconstructs dist = pathFraction * totalPerim
-        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) /
-                totalHours
+        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f) / totalHours
 
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
             event        = event,
@@ -114,7 +125,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         )
         _state.update { it.copy(
             day = newDay,
-            perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour
+            perfectHitHour = if (isPerfect) targetTick!!.hour else it.perfectHitHour
         )}
         viewModelScope.launch { repo.saveDay(newDay) }
     }
