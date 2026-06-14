@@ -26,37 +26,31 @@ fun TimelinePillCanvas(
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pill")
 
-    // Slow pulse for perfect-hit white glow
+    // White outer glow for perfect hit
     val perfectPulse by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 0.1f,
         animationSpec = infiniteRepeatable(tween(800, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "perfect"
     )
-    // Faster pulse for missed gray fill (radius fraction 0→1)
+    // Gray fill circle for missed: radius fraction 0→1
     val missedPulse by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(700, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "missed"
-    )
-    // Gentle pulse for pending node fill
-    val pendingPulse by infiniteTransition.animateFloat(
-        initialValue = 0.05f, targetValue = 0.35f,
-        animationSpec = infiniteRepeatable(tween(1200, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "pending"
     )
 
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val stroke    = 5.dp.toPx()
-        val nodeR     = 13.dp.toPx()
-        val capR      = w / 2f
-        val straightH = (h - 2 * capR).coerceAtLeast(0f)
-        val semiPerim = PI.toFloat() * capR
+        val stroke     = 5.dp.toPx()
+        val nodeR      = 13.dp.toPx()
+        val capR       = w / 2f
+        val straightH  = (h - 2 * capR).coerceAtLeast(0f)
+        val semiPerim  = PI.toFloat() * capR
         val totalPerim = 2 * straightH + 2 * semiPerim
-        val cx = w / 2f
+        val cx         = w / 2f
         val totalHours = (endHour - startHour).toFloat().coerceAtLeast(1f)
-        val hourSeg = totalPerim / totalHours
+        val hourSeg    = totalPerim / totalHours
 
         fun perimToOffset(raw: Float): Offset {
             val d    = ((raw % totalPerim) + totalPerim) % totalPerim
@@ -96,7 +90,7 @@ fun TimelinePillCanvas(
         }
         drawPath(trackPath, TerminalMidGray.copy(alpha = 0.5f), style = Stroke(stroke))
 
-        // ── Progress arc ──────────────────────────────────────────────
+        // ── Progress arc (minute precision) ────────────────────────────
         val elapsedHours = (now.hour - startHour) + now.minute / 60f
         val progressDist = (elapsedHours * hourSeg).coerceIn(0f, totalPerim)
         if (progressDist > 0f) {
@@ -112,6 +106,12 @@ fun TimelinePillCanvas(
         if (targets.isEmpty()) return@Canvas
 
         // ── Target nodes ──────────────────────────────────────────────
+        // Rules (all solid fills, no outlines):
+        // Pending, arc not passed  → solid TerminalGray
+        // Pending, arc passed      → solid accuracyColor(dayScore) [live, same as arc]
+        // Hit normal               → solid accuracyColor(s.accuracy) [frozen at hit time]
+        // Hit perfect (current)    → solid TerminalGreen + white outer pulse
+        // Missed                   → solid TerminalDeepRed + pulsating gray circle
         targets.forEachIndexed { idx, target ->
             val dist      = idx * hourSeg
             val pos       = perimToOffset(dist)
@@ -119,23 +119,23 @@ fun TimelinePillCanvas(
 
             when (val s = target.status) {
 
-                // ─ Hit ─────────────────────────────────────────────────────
+                is TargetStatus.Pending -> {
+                    val fillColor = if (arcPassed) accuracyColor(dayScore) else TerminalGray
+                    drawCircle(fillColor, nodeR, pos)
+                }
+
                 is TargetStatus.Hit -> {
-                    val hitColor = if (s.isPerfect) TerminalGreen else accuracyColor(s.accuracy)
-                    if (s.isPerfect && target.hour == perfectHitHour) {
+                    val isPerfectNow = s.isPerfect && target.hour == perfectHitHour
+                    val fillColor    = if (s.isPerfect) TerminalGreen else accuracyColor(s.accuracy)
+                    if (isPerfectNow) {
                         // Pulsating white outer glow
                         drawCircle(TerminalWhite, nodeR * 2.5f, pos, alpha = perfectPulse * 0.6f)
                     }
-                    // Soft glow halo
-                    drawCircle(hitColor, nodeR * 2f, pos, alpha = 0.25f)
-                    // Solid fill + ring
-                    drawCircle(hitColor, nodeR, pos)
-                    drawCircle(TerminalWhite, nodeR, pos, style = Stroke(2f), alpha = 0.3f)
+                    drawCircle(fillColor, nodeR, pos)
                 }
 
-                // ─ Missed ────────────────────────────────────────────────
                 is TargetStatus.Missed -> {
-                    // Deep red triangle
+                    // Solid deep-red triangle
                     val triPath = Path().apply {
                         moveTo(pos.x, pos.y - nodeR)
                         lineTo(pos.x + nodeR * 0.866f, pos.y + nodeR * 0.5f)
@@ -143,28 +143,13 @@ fun TimelinePillCanvas(
                         close()
                     }
                     drawPath(triPath, TerminalDeepRed)
-                    drawPath(triPath, TerminalRed, style = Stroke(2f))
-                    // Pulsating light-gray circle fill (radius 0 → nodeR)
-                    val pulseR = missedPulse * nodeR
-                    if (pulseR > 0f)
-                        drawCircle(TerminalGray, pulseR, pos, alpha = 0.6f)
-                }
-
-                // ─ Pending ───────────────────────────────────────────────
-                is TargetStatus.Pending -> {
-                    // Ring color: score color if arc has passed, gray if not yet
-                    val ringColor = if (arcPassed) accuracyColor(dayScore) else TerminalGray
-                    // Dark fill so node reads as hollow
-                    drawCircle(TerminalBackground, nodeR, pos)
-                    // Pulsating gray center fill (subtle breathing)
-                    drawCircle(TerminalGray, nodeR, pos, alpha = pendingPulse)
-                    // Outer ring
-                    drawCircle(ringColor, nodeR, pos, style = Stroke(3f))
+                    // Pulsating light-gray circle: radius 0 → nodeR, full alpha
+                    drawCircle(TerminalGray, missedPulse * nodeR, pos)
                 }
             }
         }
 
-        // ── Press marker dots (always on top) ────────────────────────
+        // ── Press marker dots (always on top) ───────────────────────
         markers.forEach { marker ->
             val dist = marker.pathFraction * totalPerim
             val pos  = perimToOffset(dist)
