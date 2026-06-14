@@ -82,19 +82,29 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         else
             TargetResolver.nextPendingTarget(day.targets, now)
         ?: return
-        val event = ClockEvent(timestamp = now)
+
+        val event    = ClockEvent(timestamp = now)
         val targetDt = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
         val minutes  = ChronoUnit.MINUTES.between(targetDt, now)
         val accuracy = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
+
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
-        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) / totalHours
+        // pathFraction = elapsed hours / totalHours (0..1)
+        // Canvas reconstructs dist = pathFraction * totalPerim
+        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f + now.second / 3600f) /
+                totalHours
+
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
-            event = event, pathFraction = pathFrac.coerceIn(0f, 1f),
-            accuracy = accuracy, targetHour = targetTick.hour
+            event        = event,
+            pathFraction = pathFrac.coerceIn(0f, 1f),
+            accuracy     = accuracy,
+            targetHour   = targetTick.hour
         )
         val updatedTargets = day.targets.map { t ->
-            if (t.hour == targetTick.hour) t.copy(status = TargetStatus.Hit(event, accuracy, isPerfect)) else t
+            if (t.hour == targetTick.hour)
+                t.copy(status = TargetStatus.Hit(event, accuracy, isPerfect))
+            else t
         }
         val newDay = day.copy(
             rawEvents = day.rawEvents + event,
@@ -102,7 +112,10 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             targets   = updatedTargets,
             score     = ScoreCalculator.dayScore(updatedTargets)
         )
-        _state.update { it.copy(day = newDay, perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour) }
+        _state.update { it.copy(
+            day = newDay,
+            perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour
+        )}
         viewModelScope.launch { repo.saveDay(newDay) }
     }
 

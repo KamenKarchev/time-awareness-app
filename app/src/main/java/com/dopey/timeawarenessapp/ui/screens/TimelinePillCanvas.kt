@@ -35,19 +35,23 @@ fun TimelinePillCanvas(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val stroke = 3.5.dp.toPx()
-        val nodeR = 9.dp.toPx()
-        val capR = w / 2f
+        val stroke   = 3.5.dp.toPx()
+        val nodeR    = 9.dp.toPx()
+        val capR     = w / 2f
         val straightH = (h - 2 * capR).coerceAtLeast(0f)
         val semiPerim = PI.toFloat() * capR
         val totalPerim = 2 * straightH + 2 * semiPerim
         val cx = w / 2f
         val totalHours = (endHour - startHour).toFloat().coerceAtLeast(1f)
+        // h = one hour segment length on the perimeter
+        val hourSeg = totalPerim / totalHours
 
-        // ── Helper: perimeter distance → canvas Offset ────────────────────
-        // d=0 is the top-centre of the pill; advances clockwise.
+        // ── Single source of truth: d=0 is top-centre, clockwise ──────────
+        // All three consumers (progress arc, target nodes, press markers)
+        // derive their distance via:  d = elapsedHours * hourSeg
+        // where elapsedHours = (hour - startHour) + minute/60 + second/3600
         fun perimToOffset(raw: Float): Offset {
-            val d = ((raw % totalPerim) + totalPerim) % totalPerim
+            val d    = ((raw % totalPerim) + totalPerim) % totalPerim
             val seg1 = semiPerim / 2f
             val seg2 = seg1 + straightH
             val seg3 = seg2 + semiPerim
@@ -84,24 +88,26 @@ fun TimelinePillCanvas(
         }
         drawPath(trackPath, TerminalGray.copy(alpha = 0.3f), style = Stroke(stroke))
 
-        // ── Progress arc (same origin: d=0 = top-centre) ─────────────────
-        val elapsedFrac = ((now.hour - startHour) + now.minute / 60f + now.second / 3600f) /
-                totalHours
-        val progressPerim = elapsedFrac.coerceIn(0f, 1f) * totalPerim
-        if (progressPerim > 0f) {
-            val pm = android.graphics.PathMeasure(trackPath.asAndroidPath(), false)
-            val dst = android.graphics.Path()
-            pm.getSegment(0f, progressPerim, dst, true)
-            drawPath(dst.asComposePath(), accuracyColor(dayScore), style = Stroke(stroke))
+        // ── Progress arc: built from perimToOffset samples ────────────────
+        // d = elapsedHours * hourSeg  →  same formula as nodes and markers
+        val elapsedHours = (now.hour - startHour) + now.minute / 60f + now.second / 3600f
+        val progressDist = (elapsedHours * hourSeg).coerceIn(0f, totalPerim)
+        if (progressDist > 0f) {
+            val steps = 200
+            val arcPath = Path()
+            for (i in 0..steps) {
+                val d   = progressDist * i / steps
+                val off = perimToOffset(d)
+                if (i == 0) arcPath.moveTo(off.x, off.y) else arcPath.lineTo(off.x, off.y)
+            }
+            drawPath(arcPath, accuracyColor(dayScore), style = Stroke(stroke))
         }
 
-        // ── Nodes (same origin: hour midpoint mapped through totalHours) ──
-        // Each target sits at the centre of its hour slot, using the same
-        // fraction formula as the progress arc and press markers.
+        // ── Target nodes: idx-th node at d = idx * hourSeg + hourSeg/2 ────
+        // = the midpoint of that hour's slot, counted from d=0 in hourSeg steps
         if (targets.isEmpty()) return@Canvas
-        targets.forEach { target ->
-            val frac = ((target.hour - startHour) + 0.5f) / totalHours
-            val dist = frac.coerceIn(0f, 1f) * totalPerim
+        targets.forEachIndexed { idx, target ->
+            val dist = idx * hourSeg + hourSeg / 2f
             val pos  = perimToOffset(dist)
 
             val isPassed = target.status is TargetStatus.Hit ||
@@ -135,7 +141,8 @@ fun TimelinePillCanvas(
             }
         }
 
-        // ── Press marker dots (pathFraction already uses same origin) ─────
+        // ── Press marker dots: pathFraction * totalHours gives elapsed hours
+        // so dist = pathFraction * totalHours * hourSeg = pathFraction * totalPerim
         markers.forEach { marker ->
             val dist = marker.pathFraction * totalPerim
             val pos  = perimToOffset(dist)
