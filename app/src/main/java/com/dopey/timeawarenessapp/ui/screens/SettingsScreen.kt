@@ -114,3 +114,26 @@ private fun SettingsLabel(text: String) =
         fontSize   = 11.sp,
         color      = TerminalGray
     )
+
+
+    @Composable
+private fun HourStepper(value: Int, range: IntRange, onValue: (Int) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        IconButton(onClick = { if (value > range.first) onValue(value - 1) }) {
+            Text("-", fontFamily = FontFamily.Monospace, fontSize = 20.sp, color = TerminalGreen)
+        }
+        Text(
+            "%02d:00".format(value),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            color = TerminalGreen
+        )
+        IconButton(onClick = { if (value < range.last) onValue(value + 1) }) {
+            Text("+", fontFamily = FontFamily.Monospace, fontSize = 20.sp, color = TerminalGreen)
+        }
+    }
+}
