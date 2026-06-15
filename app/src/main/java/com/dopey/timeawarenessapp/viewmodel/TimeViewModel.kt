@@ -103,7 +103,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         ?: return
 
         val event     = ClockEvent(timestamp = now)
-        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
+        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick!!.hour, 0))
         val minutes   = ChronoUnit.MINUTES.between(targetDt, now)
         val accuracy  = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
