@@ -51,6 +51,14 @@ fun TimeAwarenessContent(state: AppUiState, onIntent: (TimeIntent) -> Unit) {
     val now        = state.now
     val nextTarget = TargetResolver.nextPendingTarget(day.targets, now)
 
+    // Confetti fires once each time perfectHitHour transitions to a non-null value
+    var confettiTrigger by remember { mutableStateOf(false) }
+    LaunchedEffect(state.perfectHitHour) {
+        if (state.perfectHitHour != null) {
+            confettiTrigger = !confettiTrigger
+        }
+    }
+
     if (state.showEarlyDialog && nextTarget != null) {
         EarlyClockInDialog(
             nextTargetHour = nextTarget.hour,
@@ -132,9 +140,14 @@ fun TimeAwarenessContent(state: AppUiState, onIntent: (TimeIntent) -> Unit) {
                             onClockIn  = { onIntent(TimeIntent.ClockIn) }
                         )
                     }
+                    // Confetti burst on perfect hit — renders above everything
+                    ConfettiOverlay(
+                        trigger  = confettiTrigger,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
 
-                // ── DEBUG row ────────────────────────────────────────────────
+                // ── DEBUG row ────────────────────────────────────────────────────────
                 var debugTime by remember { mutableStateOf("") }
                 Row(
                     modifier = Modifier

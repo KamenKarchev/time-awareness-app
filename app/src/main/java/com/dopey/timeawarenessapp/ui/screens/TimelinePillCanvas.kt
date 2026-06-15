@@ -26,12 +26,14 @@ fun TimelinePillCanvas(
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pill")
 
+    // Persistent white glow for perfect hit nodes
     val perfectPulse by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 0.1f,
         animationSpec = infiniteRepeatable(tween(800, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "perfect"
     )
-    val missedPulse by infiniteTransition.animateFloat(
+    // Triangle inside missed node pulses 0 → 0.6 * nodeR
+    val missedTriPulse by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(700, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "missed"
@@ -104,11 +106,6 @@ fun TimelinePillCanvas(
         if (targets.isEmpty()) return@Canvas
 
         // ── Target nodes ──────────────────────────────────────────────
-        // Pending not passed  → solid TerminalGray
-        // Pending passed      → impossible after tick() auto-marks Missed
-        // Hit normal          → solid accuracyColor(dayScore) [live, same as arc]
-        // Hit perfect active  → solid TerminalGreen + white outer pulse
-        // Missed              → solid TerminalDeepRed triangle + pulsing gray circle
         targets.forEachIndexed { idx, target ->
             val dist = idx * hourSeg
             val pos  = perimToOffset(dist)
@@ -116,30 +113,34 @@ fun TimelinePillCanvas(
             when (val s = target.status) {
 
                 is TargetStatus.Pending -> {
-                    // Only reachable for current or future targets (past ones are Missed by tick)
                     drawCircle(TerminalGray, nodeR, pos)
                 }
 
                 is TargetStatus.Hit -> {
-                    val isPerfectNow = s.isPerfect && target.hour == perfectHitHour
-                    if (isPerfectNow) {
+                    if (s.isPerfect) {
+                        // Permanent green + persistent white outer pulse
                         drawCircle(TerminalWhite, nodeR * 2.5f, pos, alpha = perfectPulse * 0.6f)
                         drawCircle(TerminalGreen, nodeR, pos)
                     } else {
-                        // Live score color — same as arc and all other passed nodes
+                        // Live score color — updates with every score change
                         drawCircle(accuracyColor(dayScore), nodeR, pos)
                     }
                 }
 
                 is TargetStatus.Missed -> {
-                    val triPath = Path().apply {
-                        moveTo(pos.x, pos.y - nodeR)
-                        lineTo(pos.x + nodeR * 0.866f, pos.y + nodeR * 0.5f)
-                        lineTo(pos.x - nodeR * 0.866f, pos.y + nodeR * 0.5f)
-                        close()
+                    // Solid deep-red circle as base
+                    drawCircle(TerminalDeepRed, nodeR, pos)
+                    // Inset pulsating gray triangle (max radius = 0.6 * nodeR, never touches edge)
+                    val triR = missedTriPulse * nodeR * 0.6f
+                    if (triR > 0f) {
+                        val triPath = Path().apply {
+                            moveTo(pos.x, pos.y - triR)
+                            lineTo(pos.x + triR * 0.866f, pos.y + triR * 0.5f)
+                            lineTo(pos.x - triR * 0.866f, pos.y + triR * 0.5f)
+                            close()
+                        }
+                        drawPath(triPath, TerminalGray)
                     }
-                    drawPath(triPath, TerminalDeepRed)
-                    drawCircle(TerminalGray, missedPulse * nodeR, pos)
                 }
             }
         }
