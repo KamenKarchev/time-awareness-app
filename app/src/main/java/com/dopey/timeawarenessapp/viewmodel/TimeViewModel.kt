@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 
 class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
@@ -27,8 +28,12 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
 
     init {
         val today = LocalDate.now()
-        val day = repo.loadDay(today)
-        _state.update { it.copy(day = day) }
+        val day   = repo.loadDay(today)
+        _state.update { it.copy(
+            day            = day,
+            allDayScores   = repo.loadDayScores(),
+            overallAverage = repo.overallAverage()
+        )}
     }
 
     fun processIntent(intent: TimeIntent) {
@@ -40,8 +45,9 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             is TimeIntent.DismissAllDoneDialog -> _state.update { it.copy(showAllDoneDialog = false) }
             is TimeIntent.SetTimeRange         -> setRange(intent.startHour, intent.endHour)
             is TimeIntent.ExportData           -> export()
-            is TimeIntent.OpenMenu             -> _state.update { it.copy(isMenuOpen = true) }
-            is TimeIntent.CloseMenu            -> _state.update { it.copy(isMenuOpen = false) }
+            is TimeIntent.ToggleDebug          -> _state.update { it.copy(debugEnabled = !it.debugEnabled) }
+            is TimeIntent.HistoryPrevMonth     -> _state.update { it.copy(historyMonth = it.historyMonth.minusMonths(1)) }
+            is TimeIntent.HistoryNextMonth     -> _state.update { it.copy(historyMonth = it.historyMonth.plusMonths(1)) }
             is TimeIntent.DebugSetTime         -> debugSetTime(intent.dateTime)
             is TimeIntent.DebugResetDay        -> debugResetDay()
         }
@@ -57,8 +63,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val today = LocalDate.now()
         if (_state.value.day.date != today) { rolloverDay(today); return }
 
-        // Auto-mark any Pending target whose hour is strictly in the past as Missed
-        val day = _state.value.day
+        val day      = _state.value.day
         val missedAny = day.targets.any {
             it.status is TargetStatus.Pending && it.hour < now.hour
         }
@@ -70,7 +75,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             }
             val newDay = day.copy(targets = updated, score = ScoreCalculator.dayScore(updated))
             _state.update { it.copy(day = newDay) }
-            viewModelScope.launch { repo.saveDay(newDay) }
+            viewModelScope.launch { repo.saveDay(newDay); refreshHistory() }
         }
     }
 
@@ -98,13 +103,13 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         ?: return
 
         val event     = ClockEvent(timestamp = now)
-        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick!!.hour, 0))
+        val targetDt  = LocalDateTime.of(day.date, LocalTime.of(targetTick.hour, 0))
         val minutes   = ChronoUnit.MINUTES.between(targetDt, now)
         val accuracy  = ScoreCalculator.hitAccuracy(minutes)
         val isPerfect = now.minute == 0 && now.second < 5
 
         val totalHours = (day.endHour - day.startHour).toFloat().coerceAtLeast(1f)
-        val pathFrac = ((now.hour - day.startHour) + now.minute / 60f) / totalHours
+        val pathFrac   = ((now.hour - day.startHour) + now.minute / 60f) / totalHours
 
         val newMarker = com.dopey.timeawarenessapp.domain.PressMarker(
             event        = event,
@@ -124,10 +129,10 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
             score     = ScoreCalculator.dayScore(updatedTargets)
         )
         _state.update { it.copy(
-            day = newDay,
-            perfectHitHour = if (isPerfect) targetTick!!.hour else it.perfectHitHour
+            day            = newDay,
+            perfectHitHour = if (isPerfect) targetTick.hour else it.perfectHitHour
         )}
-        viewModelScope.launch { repo.saveDay(newDay) }
+        viewModelScope.launch { repo.saveDay(newDay); refreshHistory() }
     }
 
     private fun setRange(start: Int, end: Int) {
@@ -136,11 +141,11 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val (resolvedTargets, resolvedMarkers) = TargetResolver.resolve(day.date, start, end, day.rawEvents)
         val newDay = day.copy(
             startHour = start, endHour = end,
-            targets = resolvedTargets, markers = resolvedMarkers,
-            score = ScoreCalculator.dayScore(resolvedTargets)
+            targets   = resolvedTargets, markers = resolvedMarkers,
+            score     = ScoreCalculator.dayScore(resolvedTargets)
         )
-        _state.update { it.copy(day = newDay, isMenuOpen = false) }
-        viewModelScope.launch { repo.saveDay(newDay) }
+        _state.update { it.copy(day = newDay) }
+        viewModelScope.launch { repo.saveDay(newDay); refreshHistory() }
     }
 
     private fun rolloverDay(today: LocalDate) {
@@ -151,6 +156,7 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val finalDay = old.copy(targets = finalTargets, endScore = ScoreCalculator.dayScore(finalTargets))
         viewModelScope.launch { repo.saveDay(finalDay) }
         _state.update { it.copy(day = repo.loadDay(today)) }
+        viewModelScope.launch { refreshHistory() }
     }
 
     private fun export() {
@@ -171,7 +177,14 @@ class TimeViewModel(private val repo: XmlRepository) : ViewModel() {
         val newDay = day.copy(rawEvents = emptyList(), markers = emptyList(),
             targets = freshTargets, score = 0, endScore = null)
         _state.update { it.copy(day = newDay) }
-        viewModelScope.launch { repo.saveDay(newDay) }
+        viewModelScope.launch { repo.saveDay(newDay); refreshHistory() }
+    }
+
+    private fun refreshHistory() {
+        _state.update { it.copy(
+            allDayScores   = repo.loadDayScores(),
+            overallAverage = repo.overallAverage()
+        )}
     }
 }
 

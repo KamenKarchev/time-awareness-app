@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Xml
 import com.dopey.timeawarenessapp.domain.ClockEvent
 import com.dopey.timeawarenessapp.domain.DayState
+import com.dopey.timeawarenessapp.domain.ScoreCalculator
 import com.dopey.timeawarenessapp.domain.TargetResolver
 import com.dopey.timeawarenessapp.domain.TargetStatus
 import org.xmlpull.v1.XmlPullParser
@@ -18,24 +19,30 @@ class XmlRepository(private val context: Context) {
     private val file: File
         get() = File(context.filesDir, "time_awareness.xml")
 
-    // ── Persist ──────────────────────────────────────────────────────────────
-
     fun saveDay(day: DayState) {
         val all = loadAllDays().toMutableMap()
         all[day.date] = day
         writeAll(all)
     }
 
-    // ── Load ─────────────────────────────────────────────────────────────────
-
-    fun loadDay(date: LocalDate): DayState {
-        return loadAllDays()[date] ?: DayState(
+    fun loadDay(date: LocalDate): DayState =
+        loadAllDays()[date] ?: DayState(
             date = date,
             targets = TargetResolver.buildTargets(date, 9, 19)
         )
-    }
 
-    // ── XML write ────────────────────────────────────────────────────────────
+    /** Map of date → final score for every persisted day. */
+    fun loadDayScores(): Map<LocalDate, Int> =
+        loadAllDays().mapValues { (_, day) ->
+            day.endScore ?: ScoreCalculator.dayScore(day.targets)
+        }
+
+    /** Average over all days that have at least one resolved target. */
+    fun overallAverage(): Int {
+        val scores = loadDayScores().values.toList()
+        if (scores.isEmpty()) return 0
+        return scores.average().toInt()
+    }
 
     private fun writeAll(days: Map<LocalDate, DayState>) {
         val serializer = Xml.newSerializer()
@@ -46,9 +53,9 @@ class XmlRepository(private val context: Context) {
             serializer.startTag(null, "timeAwareness")
             for ((_, day) in days) {
                 serializer.startTag(null, "day")
-                serializer.attribute(null, "date", day.date.toString())
+                serializer.attribute(null, "date",      day.date.toString())
                 serializer.attribute(null, "startHour", day.startHour.toString())
-                serializer.attribute(null, "endHour", day.endHour.toString())
+                serializer.attribute(null, "endHour",   day.endHour.toString())
                 if (day.endScore != null)
                     serializer.attribute(null, "endScore", day.endScore.toString())
                 for (e in day.rawEvents) {
@@ -61,10 +68,10 @@ class XmlRepository(private val context: Context) {
                     serializer.attribute(null, "hour", t.hour.toString())
                     when (val s = t.status) {
                         is TargetStatus.Hit -> {
-                            serializer.attribute(null, "status", "hit")
+                            serializer.attribute(null, "status",   "hit")
                             serializer.attribute(null, "accuracy", s.accuracy.toString())
-                            serializer.attribute(null, "ts", s.event.timestamp.toString())
-                            serializer.attribute(null, "perfect", s.isPerfect.toString())
+                            serializer.attribute(null, "ts",       s.event.timestamp.toString())
+                            serializer.attribute(null, "perfect",  s.isPerfect.toString())
                         }
                         is TargetStatus.Missed  -> serializer.attribute(null, "status", "missed")
                         is TargetStatus.Pending -> serializer.attribute(null, "status", "pending")
@@ -77,8 +84,6 @@ class XmlRepository(private val context: Context) {
             serializer.endDocument()
         }
     }
-
-    // ── XML read ─────────────────────────────────────────────────────────────
 
     private fun loadAllDays(): Map<LocalDate, DayState> {
         if (!file.exists()) return emptyMap()
@@ -94,27 +99,26 @@ class XmlRepository(private val context: Context) {
                 if (eventType == XmlPullParser.START_TAG) {
                     when (parser.name) {
                         "day" -> {
-                            date = LocalDate.parse(parser.getAttributeValue(null, "date"))
+                            date      = LocalDate.parse(parser.getAttributeValue(null, "date"))
                             startHour = parser.getAttributeValue(null, "startHour").toInt()
                             endHour   = parser.getAttributeValue(null, "endHour").toInt()
                             endScore  = parser.getAttributeValue(null, "endScore")?.toIntOrNull()
                             events.clear()
                         }
-                        "clockEvent" -> {
+                        "clockEvent" ->
                             events.add(ClockEvent(LocalDateTime.parse(parser.getAttributeValue(null, "ts"))))
-                        }
                     }
                 } else if (eventType == XmlPullParser.END_TAG && parser.name == "day" && date != null) {
                     val (targets, markers) = TargetResolver.resolve(date, startHour, endHour, events.toList())
                     result[date] = DayState(
-                        date = date,
+                        date      = date,
                         startHour = startHour,
-                        endHour = endHour,
-                        targets = targets,
+                        endHour   = endHour,
+                        targets   = targets,
                         rawEvents = events.toList(),
-                        markers = markers,
-                        score = com.dopey.timeawarenessapp.domain.ScoreCalculator.dayScore(targets),
-                        endScore = endScore
+                        markers   = markers,
+                        score     = ScoreCalculator.dayScore(targets),
+                        endScore  = endScore
                     )
                     date = null
                 }
